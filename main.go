@@ -19,14 +19,25 @@ var (
 	reverse = flag.Bool("reverse", false, "`to` to `from`")
 )
 
+var aliasCode = map[string]string{
+	"NTD": "TWD",
+}
+
 func main() {
 	flag.Parse()
 
-	toCurrency := []string{}
+	toCurrency := map[string]struct{}{}
 	{
 		toList := strings.ToUpper(*to)
 		for i := 0; i < len(*to)/3; i++ {
-			toCurrency = append(toCurrency, string(toList[:3]))
+			to := toList[:3]
+
+			alias, ok := aliasCode[to]
+			if ok {
+				toCurrency[alias] = struct{}{}
+			} else {
+				toCurrency[to] = struct{}{}
+			}
 			toList = toList[3:]
 		}
 	}
@@ -36,15 +47,18 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
-	for i := range toCurrency {
-		if len(toCurrency[i]) != 3 {
+
+	var toCurrencyCode string
+	for to := range toCurrency {
+		if len(to) != 3 {
 			log.Println("all to currency must be 3 char")
 			flag.PrintDefaults()
 			os.Exit(1)
 		}
+		toCurrencyCode += to
 	}
 
-	url := fmt.Sprintf("http://freecurrencyrates.com/api/action.php?do=cvals&f=%s&iso=%s", *from, *to)
+	url := fmt.Sprintf("http://freecurrencyrates.com/api/action.php?do=cvals&f=%s&iso=%s", *from, toCurrencyCode)
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Println("api call fail", err)
@@ -74,22 +88,34 @@ func main() {
 
 	updatedTime := time.Unix(int64(unixUpdated), 0).UTC()
 
-	for i := range toCurrency {
-		fromCurrencyCode, toCurrncyCode, exchangeRate := strings.ToUpper(*from), toCurrency[i], data[toCurrency[i]].(float64)
-		if *reverse {
-			fromCurrencyCode, toCurrncyCode, exchangeRate = toCurrncyCode, fromCurrencyCode, 1/exchangeRate
-		}
-
-		ln, err := json.Marshal(struct {
-			FromCurrencyCode string
-			ToCurrncyCode    string
-			ExchangeRate     float64
-			BaseDate         time.Time
-		}{fromCurrencyCode, toCurrncyCode, exchangeRate, updatedTime})
-		if err != nil {
-			log.Println("data create fail", err)
-			os.Exit(1)
-		}
-		fmt.Println(string(ln))
+	reverseAliasCode := map[string]string{}
+	for key, value := range aliasCode {
+		reverseAliasCode[value] = key
 	}
+
+	for toCurrencyCode := range toCurrency {
+		fromCurrencyCode, exchangeRate := strings.ToUpper(*from), data[toCurrencyCode].(float64)
+		reverseToCurrencyCode, ok := reverseAliasCode[toCurrencyCode]
+		if ok {
+			printJsonl(fromCurrencyCode, reverseToCurrencyCode, exchangeRate, updatedTime, *reverse)
+		}
+		printJsonl(fromCurrencyCode, toCurrencyCode, exchangeRate, updatedTime, *reverse)
+	}
+}
+
+func printJsonl(fromCurrencyCode, toCurrencyCode string, exchangeRate float64, updatedTime time.Time, reverse bool) {
+	if reverse {
+		fromCurrencyCode, toCurrencyCode, exchangeRate = toCurrencyCode, fromCurrencyCode, 1/exchangeRate
+	}
+	jsonl, err := json.Marshal(struct {
+		FromCurrencyCode string
+		ToCurrencyCode   string
+		ExchangeRate     float64
+		BaseDate         time.Time
+	}{fromCurrencyCode, toCurrencyCode, exchangeRate, updatedTime})
+	if err != nil {
+		log.Println("data create fail", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(jsonl))
 }
